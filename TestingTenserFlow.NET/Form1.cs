@@ -24,7 +24,7 @@ namespace TestingComputerVision.NET
         VideoCapture cap;
         List<Mat> TrainedFaces = new List<Mat>();
         List<int> PersonLabels = new List<int>();
-        bool EnabledSaveImage = false;
+        bool EnabledSaveImage = false, DetectFacesEnabled = false;
         bool IsTrained = false;
         EigenFaceRecognizer recognizer;
         Regex pattern = new Regex("[.:]");
@@ -71,7 +71,7 @@ namespace TestingComputerVision.NET
         private void FrameCaptured(object sender, EventArgs e)
         {
 
-            //Step 1: getting the capture frame
+            //Step 1: getting the captured frame
             Mat m = new Mat();
             cap.Retrieve(m);
             Image<Bgr, byte> img = m.ToImage<Bgr, byte>();
@@ -79,10 +79,11 @@ namespace TestingComputerVision.NET
 
 
             //Step 2: detecting faces in the image
-            DetectFaces(img, true);
+            if (DetectFacesEnabled) DetectFaces(img, true);
 
             //showing image in new window
             CvInvoke.Imshow("Frame", img);
+            //pictureBox1.Image = img.ToBitmap();
             if (CvInvoke.WaitKey(1) == 'q')
             {
                 cap.Stop();
@@ -102,60 +103,68 @@ namespace TestingComputerVision.NET
             //Enhancing the image to get better result
             CvInvoke.EqualizeHist(gray, gray);
 
-            Rectangle[] faces = cascadeClassifier.DetectMultiScale(gray, 1.1, 3);
+            Rectangle[] faces = cascadeClassifier.DetectMultiScale(gray, 1.05, 7);
             if (faces.Length > 0)
             {
-                int faceindex = 0;
                 foreach (var face in faces)
                 {
 
-                    CvInvoke.Rectangle(FrontImage, face, new Bgr(Color.FromArgb(255, 0, 0)).MCvScalar, 2);
                     //img.Draw(face, new Bgr(255, 0, 0), 2);
 
-                    //Step 3: Add person
-                    Image<Bgr, byte> resultImage = BackgroundImage;
-                    resultImage.ROI = face;
+                    BackgroundImage.ROI = face;
 
-                    string path = Directory.GetCurrentDirectory() + @"\TrainedFaces";
-                    if (!Directory.Exists(path)) Directory.CreateDirectory(path);
-
-
-                    if (EnabledSaveImage && video)
+                    if (EnabledSaveImage)
                     {
-                        SaveFacesVideo(resultImage);
+                        IsTrained = false;
+                        //Step 3: Add person
+
+                        string path = Directory.GetCurrentDirectory() + @"\TrainedFaces";
+                        if (!Directory.Exists(path)) Directory.CreateDirectory(path);
+                        if (video)
+                        {
+                            SaveFacesVideo(BackgroundImage);
+                        }
+                        else
+                        {
+                            SaveFacesPicture(BackgroundImage);
+                        }
+
                     }
-                    if (EnabledSaveImage && !video)
-                    {
-                        SaveFacesPicture(resultImage);
-                    }
+
 
                     //Step 5: Recognize the face
                     if (IsTrained)
                     {
-                        Image<Gray, byte> grayFaceResult = resultImage.Convert<Gray, byte>().Resize(200, 200, Emgu.CV.CvEnum.Inter.Cubic);
+                        Image<Gray, byte> grayFaceResult = BackgroundImage.Convert<Gray, byte>().Resize(200, 200, Emgu.CV.CvEnum.Inter.Cubic);
+                        pictureBox1.Image = grayFaceResult.ToBitmap();
+
 
                         var result = recognizer.Predict(grayFaceResult);
 
                         //found known faces
-                        if (result.Label > 0)
+                        if (result.Label > -1)
                         {
+                            pictureBox2.Image = TrainedFaces[result.Label].ToBitmap();
+                            CvInvoke.Rectangle(FrontImage, face, new MCvScalar(0, 255, 0), 2);
                             CvInvoke.PutText(FrontImage, LabelNameDictionary.Where(s => s.Key.Contains(result.Label)).First().Value.ToString(), new Point(face.X - 2, face.Y - 3),
                                Emgu.CV.CvEnum.FontFace.HersheyComplex, 1.0, new Bgr(Color.Orange).MCvScalar);
                         }
                         //didnt find any known faces
                         else
                         {
+                            CvInvoke.Rectangle(FrontImage, face, new MCvScalar(0, 0, 255), 2);
                             CvInvoke.PutText(FrontImage, "Unknown", new Point(face.X - 2, face.Y - 3),
-                               Emgu.CV.CvEnum.FontFace.HersheyComplex, 1.0, new Bgr(Color.Blue).MCvScalar);
+                               Emgu.CV.CvEnum.FontFace.HersheyComplex, 1.0, new Bgr(Color.Red).MCvScalar);
                         }
                     }
-
-                    faceindex++;
+                    else
+                    {
+                        CvInvoke.Rectangle(FrontImage, face, new MCvScalar(0, 0, 255), 2);
+                    }
                 }
                 if (EnabledSaveImage)
                 {
                     EnabledSaveImage = false;
-                    TrainImagesFromDir();
                 }
             }
         }
@@ -165,9 +174,9 @@ namespace TestingComputerVision.NET
             {
                 for (int i = 0; i < numberOfPics; i++)
                 {
-                        //we will save x images with delay a second for each image
-                        //resize the image then save it
-                        resultImage.Copy().Resize(200, 200, Emgu.CV.CvEnum.Inter.Cubic).Save("./TrainedFaces/person_" + FaceIndex + " n" + i + ".jpg");
+                    //we will save x images with delay a second for each image
+                    //resize the image then save it
+                    resultImage.Copy().Resize(200, 200, Emgu.CV.CvEnum.Inter.Cubic).Save("./TrainedFaces/person_" + FaceIndex + " n" + i + ".jpg");
 
                     Thread.Sleep(1000);
                 }
@@ -182,13 +191,14 @@ namespace TestingComputerVision.NET
             FaceIndex++;
         }
 
-        //Step 4: Train images
+        //Step 4: Train images  
         private bool TrainImagesFromDir()
         {
             int imageCount = 0;
             int Threshold = 7000;
             TrainedFaces.Clear();
             PersonLabels.Clear();
+            LabelNameDictionary.Clear();
             try
             {
                 string path = Directory.GetCurrentDirectory() + @"\TrainedFaces";
@@ -207,11 +217,12 @@ namespace TestingComputerVision.NET
                         if (multipleIds.Count == numberOfPics)
                         {
                             LabelNameDictionary.Add(multipleIds.ToArray(), filename.Split(' ')[0]);
+                            multipleIds.Clear();
                         }
                     }
                     else
                     {
-                    LabelNameDictionary.Add(new int[] { imageCount }, filename.Split('.')[0]);
+                        LabelNameDictionary.Add(new int[] { imageCount }, filename.Split('.')[0]);
                     }
 
 
@@ -236,9 +247,19 @@ namespace TestingComputerVision.NET
             return IsTrained;
         }
 
+        private void button4_Click(object sender, EventArgs e)
+        {
+            DetectFacesEnabled = !DetectFacesEnabled;
+        }
+
+        private void button5_Click(object sender, EventArgs e)
+        {
+            TrainImagesFromDir();
+        }
+
         private void button3_Click(object sender, EventArgs e)
         {
-            EnabledSaveImage = true;
+            EnabledSaveImage = !EnabledSaveImage;
         }
     }
 }
